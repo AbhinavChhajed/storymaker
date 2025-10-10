@@ -1,0 +1,9 @@
+images/
+audio/
+venv/
+sd-v1-4-local/
+sd-v1-5-local/
+.mp3
+.wav
+.txt
+.env
