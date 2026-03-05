@@ -6,29 +6,28 @@ import os
 import wave
 from dotenv import load_dotenv
 import time
-import whisper
+import whisper # Added import
+import time
 from pathlib import Path
 from PIL import Image
 from pydub import AudioSegment
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.prompts import PromptTemplate
-from gtts import gTTS
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from huggingface_hub import InferenceClient
-from langchain_core.output_parsers import JsonOutputParser
-from pydantic import BaseModel, Field
 
+# --- Configuration ---
 load_dotenv()
 ACCESS_KEY = os.getenv("PICOVOICE_ACCESS_KEY")
 OUTPUT_FILE = "recorded_audio.wav"
+audio_text = None
+st.title("🎙️ StoryMaker")
 
-st.title("StoryMaker")
-
+# --- Initialize session state ---
 if "listening" not in st.session_state:
     st.session_state.listening = False
 
+# --- Helper Functions ---
+
 @st.cache_data
 def get_input_devices():
+    """Gets a dictionary of available audio input devices {name: index}."""
     pa = pyaudio.PyAudio()
     devices = {}
     for i in range(pa.get_device_count()):
@@ -41,21 +40,30 @@ def get_input_devices():
 
 @st.cache_resource
 def load_whisper_model():
+    """Loads the Whisper model, caching it for performance."""
+    # Using "base" is a good balance of speed and accuracy.
+    # Other options: "tiny", "small", "medium", "large"
     model = whisper.load_model("base")
     return model
 
 def transcribe_audio(file_path):
-    st.info("Transcribing audio...")
+    st.info("Transcribing audio... ")
     model = load_whisper_model()
     try:
         result = model.transcribe(file_path)
         transcribed_text = result["text"]
         st.session_state.transcribed_text = transcribed_text
         st.text_area("Result", transcribed_text, height=150)
-    except Exception as e:
+    except Exception as e:  
         st.error(f"Error during transcription: {e}")
 
+
+# --- Core Application Logic ---
+
 def start_listening(device_index):
+    """
+    Initializes Porcupine and PyAudio to listen for a wake word on a specific device.
+    """
     porcupine = None
     pa = None
     audio_stream = None
@@ -85,11 +93,11 @@ def start_listening(device_index):
             if current_time - last_update_time > 0.4:
                 dot_count = (dot_count + 1) % 4
                 dots = "." * dot_count
-                status_placeholder.info(f"Listening for Porcupine{dots.ljust(3)}")
+                status_placeholder.info(f"Listening for 'Porcupine'{dots.ljust(3)}")
                 last_update_time = current_time
 
             if keyword_index >= 0:
-                status_placeholder.success("Wake word detected!")
+                status_placeholder.success("✅ Wake word detected!")
                 
                 audio_stream.stop_stream()
                 audio_stream.close()
@@ -98,7 +106,7 @@ def start_listening(device_index):
                 porcupine.delete()
                 porcupine = None
 
-                record_audio(device_index, pa, duration=10)
+                record_audio(device_index,pa, duration=10) 
                 
                 st.session_state.listening = False
 
@@ -117,8 +125,9 @@ def start_listening(device_index):
         
         status_placeholder.empty()
 
-def record_audio(device_index, pa, duration=10):
-    st.write(f"Recording for {duration} seconds...")
+def record_audio(device_index,pa, duration=10):
+    """Record audio and then transcribe it."""
+    st.write(f"🎤 Recording for {duration} seconds...")
     stream = pa.open(
         format=pyaudio.paInt16,
         channels=1,
@@ -142,10 +151,13 @@ def record_audio(device_index, pa, duration=10):
         wf.setframerate(16000)
         wf.writeframes(b"".join(frames))
 
-    st.success(f"Audio recorded and saved as {OUTPUT_FILE}")
+    st.success(f"🎧 Audio recorded and saved as {OUTPUT_FILE}")
     st.audio(OUTPUT_FILE)
+
+    # Call the transcription function
     transcribe_audio(OUTPUT_FILE)
 
+# --- UI Controls ---
 st.markdown("### 1. Select your microphone")
 input_devices = get_input_devices()
 device_names = list(input_devices.keys())
@@ -159,7 +171,7 @@ selected_device_name = st.selectbox(
     "Choose your microphone from the list below.",
     options=device_names,
     index=default_selection,
-    help="Your built-in laptop microphone is likely the Microphone Array."
+    help="Your built-in laptop microphone is likely the 'Microphone Array (Realtek...)'."
 )
 selected_device_index = input_devices[selected_device_name]
 
@@ -167,14 +179,31 @@ st.markdown("### 2. Start Listening")
 
 col1, col2 = st.columns(2)
 
-if col1.button("Start Listening", use_container_width=True):
+if col1.button("▶️ Start Listening", use_container_width=True):
     if not st.session_state.listening:
         st.session_state.listening = True
         start_listening(device_index=selected_device_index)
 
-if col2.button("Stop Listening", use_container_width=True):
+if col2.button("⏹️ Stop Listening", use_container_width=True):
     st.session_state.listening = False
     st.warning("Stopped listening.")
+
+
+
+############################################################################
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain.prompts import PromptTemplate
+from langchain.schema.runnable import RunnableSequence
+from gtts import gTTS
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+import json
+from huggingface_hub import InferenceClient
+import matplotlib.pyplot as plt
+from diffusers import StableDiffusionPipeline
+import torch
+import os
+from langchain_core.output_parsers import JsonOutputParser
+from pydantic import BaseModel, Field
 
 class VisualMemory(BaseModel):
     characters: list[dict] = Field(description="List of characters, each containing 'name' and 'description' keys.")
@@ -197,7 +226,7 @@ Rules:
 6. Do not change meaning, tone, or vocabulary.
 
 Transcript to correct:
-{text}""", input_variables=["text"]
+{text}""",input_variables=["text"]
 )
 
 story_prompt = PromptTemplate(
@@ -208,21 +237,30 @@ story_prompt = PromptTemplate(
 
 Guidelines:
 - Audience: children aged 6-12.
-- Length: 1-2 short paragraphs.
+- Length: 2-3 short paragraphs.
 - Clear beginning, middle, and end.
 - Simple vocabulary with vivid imagery.
 - Include interesting characters with names.
 - Emotional depth without being too complex.
 - Ensure the story is uplifting and easy to follow based in a single setting.
 
-    """, input_variables=['idea']
+    """
+    ,input_variables=['idea']
 )
-story_chain = correct_text_prompt | llm | story_prompt | llm
-
+story_chain = correct_text_prompt|llm|story_prompt|llm
 if "transcribed_text" in st.session_state:
     user_idea = st.session_state.transcribed_text
 else:
     user_idea = st.text_area("Or type your idea here:", "")
+
+        
+story = story_chain.invoke({"text":user_idea})
+st.write("\n--- Your Story ---\n")
+st.write(story.content)
+
+tts = gTTS(story.content)
+audio_file = "audio_file.mp3"
+tts.save(audio_file)
 
 parser = JsonOutputParser(pydantic_object=VisualMemory)
 
@@ -241,8 +279,26 @@ story text:
 )
 
 consistancy_chain = consistancy_prompt | llm | parser
+try:
+    extracted_info = consistancy_chain.invoke({"text": story.content})
+except Exception as e:
+    st.error(f"Failed to parse the visual memory: {e}")
+    extracted_info = {"characters": [], "setting": "A whimsical landscape", "objects": [], "style": "storybook illustration"}
+
+text_splitter = RecursiveCharacterTextSplitter(chunk_size=200,chunk_overlap=20,separators=["\n\n", ".", "!", "?", ",", " "])
+
+chunks = text_splitter.split_text(story.content)
+
+list_of_chunks = []
+for c in chunks:
+    list_of_chunks.append(c)
+
 
 def make_image_prompt(extracted_info, chunk_text):
+    """
+    Build a high-quality image generation prompt from story chunk + extracted info.
+    Ensures descriptive clarity, consistency, and alignment with narrative tone.
+    """
     characters = "\n".join(
         [f"- {c['name']}: {c['description']}" for c in extracted_info.get("characters", [])]
     ) or "None specified"
@@ -273,96 +329,105 @@ Requirements:
 
     return prompt.strip()
 
-def generate_story_and_images(chunks, prompts, hf_token):
-    story_chunks = chunks
-    client = InferenceClient(token=hf_token)
 
+image_generation_prompt_list = []
+for i in list_of_chunks:
+    image_generation_prompt_list.append(make_image_prompt(extracted_info,i))
+
+
+# # Pick device automatically
+# device = "cuda" if torch.cuda.is_available() else "cpu"
+# pipeline = StableDiffusionPipeline.from_pretrained(
+#     "./sd-v1-5-local",
+#     torch_dtype=torch.float16 if device == "cuda" else torch.float32
+# ).to(device)
+
+# pipeline.enable_attention_slicing()
+
+# # Ensure output directory exists
+# os.makedirs("images", exist_ok=True)
+# # Keep prompts short (<77 tokens each)
+# for i, prompt in enumerate(image_generation_prompt_list):
+#     # Truncate prompt for safety (77 tokens ~ 200 characters as rough cutoff)
+#     prompt = prompt[:200]  
+    
+#     # Generate image
+#     image = pipeline(
+#         prompt,
+#         height=512,
+#         width=512
+#     ).images[0]
+    
+#     # Save output
+#     image.save(f"images/{i}.png")
+
+hf_token = ""
+
+client = InferenceClient(token=hf_token)
+os.makedirs("images", exist_ok=True)
+
+for i, prompt in enumerate(image_generation_prompt_list):
+    prompt = prompt[:600]  
+    
+    try:
+        image = client.text_to_image(
+            prompt,
+            model="stabilityai/stable-diffusion-2-1" 
+        )
+        
+        image.save(f"images/{i+1}.png")
+        
+    except Exception as e:
+        st.error(f"Error generating image {i+1}: {e}")
+
+def generate_story_and_images(chunks):
+    story_chunks = chunks
+
+    # Create folders
     Path("images").mkdir(exist_ok=True)
     Path("audio").mkdir(exist_ok=True)
 
     image_paths, audio_paths, durations = [], [], []
 
-    for i, (text, prompt) in enumerate(zip(story_chunks, prompts)):
+    for i, text in enumerate(story_chunks):
+        # --- Generate placeholder image ---
         img_path = f"images/{i+1}.png"
-        try:
-            image = client.text_to_image(
-                prompt[:700],
-                model="stabilityai/stable-diffusion-xl-base-1.0" 
-            )
-            image.save(img_path)
-        except Exception as e:
-            st.error(f"Error generating image {i+1}: {e}")
-            Image.new('RGB', (512, 512), color='gray').save(img_path)
-            
         image_paths.append(img_path)
 
+        # --- Generate TTS audio ---
         audio_path = f"audio/{i+1}.mp3"
-        try:
-            tts = gTTS(text=text, lang="en")
-            tts.save(audio_path)
-            
-            audio = AudioSegment.from_file(audio_path)
-            duration = len(audio) / 1000.0  
-        except Exception as e:
-            st.error(f"Error generating audio {i+1}: {e}")
-            duration = 3.0 
+        tts = gTTS(text=text, lang="en")
+        tts.save(audio_path)
 
+        # Get audio duration
+        audio = AudioSegment.from_file(audio_path)
+        duration = len(audio) / 1000.0  # in seconds
         audio_paths.append(audio_path)
         durations.append(duration)
 
     return story_chunks, image_paths, audio_paths, durations
 
+
+# --- Generate Story & Picture Book ---
 if st.button("Generate Story & Picture Book"):
-    if not user_idea.strip():
-        st.warning("Please provide a story idea first!")
-        st.stop()
+    with st.spinner("Generating story, images, and audio..."):
+        story_chunks, image_paths, audio_paths, durations = generate_story_and_images(list_of_chunks)
 
-    with st.spinner("Writing story, extracting visual memory, and generating media..."):
-        st.info("Writing the story...")
-        story = story_chain.invoke({"text": user_idea})
-        
-        st.info("Analyzing story for visual consistency...")
-        try:
-            extracted_info = consistancy_chain.invoke({"text": story.content})
-        except Exception as e:
-            st.error(f"Failed to parse visual memory: {e}")
-            extracted_info = {"characters": [], "setting": "A whimsical landscape", "objects": [], "style": "storybook illustration"}
-
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=200, chunk_overlap=20, separators=["\n\n", ".", "!", "?", ",", " "])
-        list_of_chunks = text_splitter.split_text(story.content)
-
-        image_generation_prompt_list = []
-        for chunk in list_of_chunks:
-            image_generation_prompt_list.append(make_image_prompt(extracted_info, chunk))
-
-        hf_token = "" 
-        if not hf_token:
-            st.error("Hugging Face Token is missing from .env!")
-            st.stop()
-             
-        story_chunks, image_paths, audio_paths, durations = generate_story_and_images(
-            list_of_chunks, 
-            image_generation_prompt_list, 
-            hf_token
-        )
-
-    st.session_state.full_story_text = story.content 
     st.session_state.story_chunks = story_chunks
     st.session_state.image_paths = image_paths
     st.session_state.audio_paths = audio_paths
     st.session_state.durations = durations
-    
-    st.success("Story Maker pipeline complete!")
+    st.success("✅ Story and picture book generated!")
 
-    st.write("\n### --- Your Full Story ---\n")
-    st.write(story.content)
-    
-    st.subheader("Generated Storyboard Preview")
+    # Show preview
+    st.subheader("Generated Story Preview")
     for text, img_path, audio_path in zip(story_chunks, image_paths, audio_paths):
         st.image(img_path, use_container_width=True)
         st.write(text)
         st.audio(audio_path)
 
+
+# --- Storytelling Mode ---
 if "story_chunks" in st.session_state and st.button("Start Storytelling"):
     story_chunks = st.session_state.story_chunks
     image_paths = st.session_state.image_paths
@@ -381,4 +446,6 @@ if "story_chunks" in st.session_state and st.button("Start Storytelling"):
         with audio_placeholder:
             st.audio(audio_path, autoplay=True)
 
+        # Wait for audio to finish before moving on
         time.sleep(duration)
+
